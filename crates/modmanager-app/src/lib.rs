@@ -7,17 +7,19 @@ pub struct AppState {
     pub config: RwLock<AppConfig>,
     pub curseforge: CurseForgeApi,
     pub modrinth: ModrinthApi,
-    pub downloader: Downloader,
+    pub downloader: RwLock<Downloader>,
 }
 
 impl AppState {
     pub fn new() -> anyhow::Result<Self> {
         let config = AppConfig::load().unwrap_or_default();
+        let use_mirror = config.use_mirror;
+        let downloader = Downloader::new()?.with_mirror(use_mirror);
         Ok(Self {
             config: RwLock::new(config),
             curseforge: CurseForgeApi::new()?,
             modrinth: ModrinthApi::new()?,
-            downloader: Downloader::new()?,
+            downloader: RwLock::new(downloader),
         })
     }
 }
@@ -101,8 +103,8 @@ async fn install_mod(
 
     std::fs::create_dir_all(&mods_dir).map_err(|e| e.to_string())?;
 
-    let path = state
-        .downloader
+    let downloader = state.downloader.read().await;
+    let path = downloader
         .download_version(&version, &mods_dir)
         .await
         .map_err(|e| e.to_string())?;
@@ -182,8 +184,14 @@ async fn update_config(
         serde_json::from_value(config).map_err(|e| e.to_string())?;
     new_config.save().map_err(|e| e.to_string())?;
 
+    let use_mirror = new_config.use_mirror;
     let mut current = state.config.write().await;
     *current = new_config;
+
+    drop(current);
+
+    let mut downloader = state.downloader.write().await;
+    *downloader = Downloader::new().map_err(|e| e.to_string())?.with_mirror(use_mirror);
 
     Ok(())
 }
@@ -191,45 +199,25 @@ async fn update_config(
 #[tauri::command]
 async fn check_updates(
     state: tauri::State<'_, Arc<AppState>>,
+    game_version: Option<String>,
+    loader: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let config = state.config.read().await;
     let mods_dir = config
         .mods_dir()
         .ok_or("No active mod directory configured".to_string())?;
 
-    let local_mods = ModScanner::scan_mods_dir(&mods_dir).map_err(|e| e.to_string())?;
+    let checker = UpdateChecker::new(&state.curseforge as &dyn ModPlatform, &state.modrinth as &dyn ModPlatform)
+        .with_game_version(game_version.map(GameVersion::new))
+        .with_loader(loader.and_then(|l| match l.to_lowercase().as_str() {
+            "forge" => Some(ModLoader::Forge),
+            "neoforge" => Some(ModLoader::NeoForge),
+            "fabric" => Some(ModLoader::Fabric),
+            "quilt" => Some(ModLoader::Quilt),
+            _ => None,
+        }));
 
-    let mut updates = Vec::new();
-
-    for local_mod in &local_mods {
-        if let Some(ref meta) = local_mod.metadata {
-            let latest_versions = match meta.provider {
-                ModProvider::CurseForge => {
-                    state
-                        .curseforge
-                        .get_mod_versions(&meta.mod_id)
-                        .await
-                        .map_err(|e| e.to_string())?
-                }
-                _ => {
-                    state
-                        .modrinth
-                        .get_mod_versions(&meta.mod_id)
-                        .await
-                        .map_err(|e| e.to_string())?
-                }
-            };
-
-            if let Some(latest) = latest_versions.first() {
-                if local_mod.has_update_available(&latest.id) {
-                    updates.push(serde_json::json!({
-                        "local_mod": local_mod,
-                        "latest_version": latest,
-                    }));
-                }
-            }
-        }
-    }
+    let updates = checker.check_updates(&mods_dir).await.map_err(|e| e.to_string())?;
 
     serde_json::to_value(updates).map_err(|e| e.to_string())
 }

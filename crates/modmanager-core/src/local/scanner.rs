@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use crate::local::ModMetadata;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalMod {
     pub path: PathBuf,
     pub filename: String,

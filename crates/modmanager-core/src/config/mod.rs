@@ -8,6 +8,8 @@ pub struct AppConfig {
     pub active_mod_dir: Option<String>,
     pub preferred_game_version: Option<String>,
     pub preferred_loader: Option<String>,
+    #[serde(default)]
+    pub use_mirror: bool,
     #[serde(default = "default_language")]
     pub language: String,
 }
@@ -23,6 +25,7 @@ impl Default for AppConfig {
             active_mod_dir: default_minecraft_dir(),
             preferred_game_version: None,
             preferred_loader: None,
+            use_mirror: false,
             language: default_language(),
         }
     }

@@ -1,6 +1,8 @@
+pub mod bmclapi;
 pub mod curseforge;
 pub mod modrinth;
 
+pub use bmclapi::BmclapiMirror;
 pub use curseforge::CurseForgeApi;
 pub use modrinth::ModrinthApi;
 

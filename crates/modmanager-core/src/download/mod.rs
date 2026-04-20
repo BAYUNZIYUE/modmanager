@@ -1,10 +1,13 @@
 use std::path::Path;
 
 use sha1::Digest;
+use crate::api::bmclapi::BmclapiMirror;
 use crate::models::ModVersion;
 
 pub struct Downloader {
     client: reqwest::Client,
+    mirror: BmclapiMirror,
+    use_mirror: bool,
 }
 
 impl Downloader {
@@ -12,7 +15,17 @@ impl Downloader {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(300))
             .build()?;
-        Ok(Self { client })
+        let mirror = BmclapiMirror::new()?;
+        Ok(Self {
+            client,
+            mirror,
+            use_mirror: false,
+        })
+    }
+
+    pub fn with_mirror(mut self, enabled: bool) -> Self {
+        self.use_mirror = enabled;
+        self
     }
 
     pub async fn download_version(
@@ -29,24 +42,41 @@ impl Downloader {
             std::fs::remove_file(&dest_path)?;
         }
 
+        let download_url = self.resolve_url(version);
+
         let resp = self
             .client
-            .get(version.download_url.as_str())
+            .get(&download_url)
             .send()
             .await?;
 
         if !resp.status().is_success() {
-            anyhow::bail!(
-                "Download failed: {} - {}",
-                resp.status(),
-                version.download_url
-            );
+            if self.use_mirror && download_url == version.download_url.as_str() {
+                if let Some(mirror_url) = BmclapiMirror::rewrite_download_url(&download_url) {
+                    let retry_resp = self.client.get(&mirror_url).send().await?;
+                    if retry_resp.status().is_success() {
+                        let bytes = retry_resp.bytes().await?;
+                        std::fs::write(&dest_path, &bytes)?;
+                        return Ok(dest_path);
+                    }
+                }
+            }
+            anyhow::bail!("Download failed: {} - {}", resp.status(), download_url);
         }
 
         let bytes = resp.bytes().await?;
         std::fs::write(&dest_path, &bytes)?;
 
         Ok(dest_path)
+    }
+
+    fn resolve_url(&self, version: &ModVersion) -> String {
+        let original = version.download_url.as_str().to_string();
+        if self.use_mirror {
+            BmclapiMirror::rewrite_download_url(&original).unwrap_or(original)
+        } else {
+            original
+        }
     }
 
     fn verify_hash(
@@ -63,7 +93,7 @@ impl Downloader {
             let mut hasher = Sha1::new();
             hasher.write_all(&data)?;
             let hash = format!("{:x}", hasher.finalize());
-            return Ok(hash == expected.as_str());
+            return Ok(hash.eq_ignore_ascii_case(expected));
         }
 
         if let Some(expected) = expected_sha512 {
@@ -72,7 +102,7 @@ impl Downloader {
             let mut hasher = Sha512::new();
             hasher.write_all(&data)?;
             let hash = format!("{:x}", hasher.finalize());
-            return Ok(hash == expected.as_str());
+            return Ok(hash.eq_ignore_ascii_case(expected));
         }
 
         Ok(true)
