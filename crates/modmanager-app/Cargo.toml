@@ -1,0 +1,20 @@
+[package]
+name = "modmanager-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Minecraft Mod Manager GUI (Tauri + React)"
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+modmanager-core = { path = "../modmanager-core" }
+tauri.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
